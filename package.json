@@ -1,6 +1,6 @@
 {
   "name": "@paulxuca/twitter-lite",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Tiny, full-featured client/server REST/stream library for the Twitter API",
   "source": [
     "twitter.js",
