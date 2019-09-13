@@ -1,11 +1,12 @@
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
 const OAuth = require('oauth-1.0a');
 const Fetch = require('cross-fetch');
 const querystring = require('querystring');
 const Stream = require('./stream');
 
-const getUrl = (subdomain, endpoint = '1.1') =>
-  `https://${subdomain}.twitter.com/${endpoint}`;
+const getUrl = (subdomain, endpoint = '1.1') => `https://${subdomain}.twitter.com/${endpoint}`;
 
 const createOauthClient = ({ key, secret }) => {
   const client = OAuth({
@@ -98,10 +99,7 @@ class Twitter {
   async getBearerToken() {
     const headers = {
       Authorization:
-        'Basic ' +
-        Buffer.from(
-          this.config.consumer_key + ':' + this.config.consumer_secret
-        ).toString('base64'),
+        'Basic ' + Buffer.from(this.config.consumer_key + ':' + this.config.consumer_secret).toString('base64'),
       'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
     };
 
@@ -124,9 +122,7 @@ class Twitter {
     if (twitterCallbackUrl) parameters = { oauth_callback: twitterCallbackUrl };
     if (parameters) requestData.url += '?' + querystring.stringify(parameters);
 
-    const headers = this.client.toHeader(
-      this.client.authorize(requestData, {})
-    );
+    const headers = this.client.toHeader(this.client.authorize(requestData, {}));
 
     const results = await Fetch(requestData.url, {
       method: 'POST',
@@ -183,9 +179,7 @@ class Twitter {
 
     let headers = {};
     if (this.authType === 'User') {
-      headers = this.client.toHeader(
-        this.client.authorize(requestData, this.token)
-      );
+      headers = this.client.toHeader(this.client.authorize(requestData, this.token));
     } else {
       headers = {
         Authorization: `Bearer ${this.config.bearer_token}`,
@@ -205,17 +199,11 @@ class Twitter {
    *   The `_header` property will be set to the Response headers (useful for checking rate limits)
    */
   get(resource, parameters) {
-    const { requestData, headers } = this._makeRequest(
-      'GET',
-      resource,
-      parameters
-    );
+    const { requestData, headers } = this._makeRequest('GET', resource, parameters);
 
     return Fetch(requestData.url, { headers })
       .then(Twitter._handleResponse)
-      .then(results =>
-        'errors' in results ? Promise.reject(results) : results
-      );
+      .then(results => ('errors' in results ? Promise.reject(results) : results));
   }
 
   /**
@@ -247,9 +235,7 @@ class Twitter {
       body,
     })
       .then(Twitter._handleResponse)
-      .then(results =>
-        'errors' in results ? Promise.reject(results) : results
-      );
+      .then(results => ('errors' in results ? Promise.reject(results) : results));
   }
 
   /**
@@ -259,8 +245,7 @@ class Twitter {
    * @returns {Stream}
    */
   stream(resource, parameters) {
-    if (this.authType !== 'User')
-      throw new Error('Streams require user context authentication');
+    if (this.authType !== 'User') throw new Error('Streams require user context authentication');
 
     const stream = new Stream();
 
@@ -272,9 +257,15 @@ class Twitter {
     };
     if (parameters) requestData.data = parameters;
 
-    const headers = this.client.toHeader(
-      this.client.authorize(requestData, this.token)
-    );
+    const headers = this.client.toHeader(this.client.authorize(requestData, this.token));
+
+    const httpAgent = new http.Agent({
+      keepAlive: true,
+    });
+
+    const httpsAgent = new https.Agent({
+      keepAlive: true,
+    });
 
     const request = Fetch(requestData.url, {
       method: 'POST',
@@ -283,22 +274,50 @@ class Twitter {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: percentEncode(querystring.stringify(parameters)),
+      agent: function(_parsedURL) {
+        if (_parsedURL.protocol == 'http:') {
+          return httpAgent;
+        } else {
+          return httpsAgent;
+        }
+      },
     });
 
     request
       .then(response => {
-        stream.destroy = this.stream.destroy = () => response.body.destroy();
+        const destroy = () => {
+          response.body.destroy();
+
+          for (const socketKey in httpAgent.sockets) {
+            const sockets = httpAgent.sockets[socketKey];
+
+            sockets.forEach(socket => {
+              socket.destroy();
+            });
+          }
+
+          for (const socketKey in httpsAgent.sockets) {
+            const sockets = httpsAgent.sockets[socketKey];
+
+            sockets.forEach(socket => {
+              socket.destroy();
+            });
+          }
+        };
+
+        stream.destroy = destroy;
+        this.stream.destroy = destroy;
 
         if (response.ok) {
           stream.emit('start', response);
         } else {
-          response._headers = response.headers.raw();  // TODO: see #44 - could omit the line
+          response._headers = response.headers.raw(); // TODO: see #44 - could omit the line
           stream.emit('error', response);
         }
 
         response.body
           .on('data', chunk => stream.parse(chunk))
-          .on('error', error => stream.emit('error', error))  // no point in adding the original response headers
+          .on('error', error => stream.emit('error', error)) // no point in adding the original response headers
           .on('end', () => stream.emit('end', response));
       })
       .catch(error => stream.emit('error', error));
